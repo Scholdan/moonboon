@@ -1,36 +1,133 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
+*.py[codz]
 *$py.class
-.venv/
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django / Flask / Scrapy
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+instance/
+.webassets-cache
+.scrapy
+
+# Documentation builds
+docs/_build/
+/site
+
+# Python build tools
+.pybuilder/
+target/
+
+# Jupyter / IPython
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# Environments
+.env
+.envrc
+.venv
+env/
 venv/
+ENV/
+env.bak/
+venv.bak/
+__pypackages__/
+
+# Type checkers / linters
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+cython_debug/
+
+# Package managers / tools
+.pdm-python
+.pdm-build/
+.pixi
+.abstra/
+.pypirc
+
+# Editors / OS
+.DS_Store
+*.swp
+*.swo
+tempCodeRunnerFile.py
 
 # Home Assistant local state
 .storage/
 
-# OS/editor
-.DS_Store
-*.swp
-*.swo
-
-# Reverse-engineering captures and logs
+# Moonboon reverse-engineering captures and logs
 captures/
 *.pcap
 *.cfa
-*.log
 *.zip
 
-# APK/repacking artifacts
+# Moonboon APK/repacking artifacts
 moonboon-apk/
 moonboon-apk-*/
 *.apk
 *.idsig
 *.keystore
 
-# Sniffer tooling and local virtualenvs
+# Moonboon sniffer tooling and local virtualenvs
 sniffer/
 
-# Local reverse-engineering helpers
+# Moonboon local reverse-engineering helpers
 capture_moonboon.py
 capture_moonboon_gadget.py
 summarize_nordic_pcap.py
