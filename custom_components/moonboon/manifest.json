@@ -10,7 +10,7 @@
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["bluetooth"],
-  "documentation": "https://github.com/custom-components/moonboon",
+  "documentation": "https://github.com/Scholdan/moonboon",
   "iot_class": "local_push",
   "requirements": [],
   "version": "0.0.1"
