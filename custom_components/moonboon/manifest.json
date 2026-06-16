@@ -1,0 +1,17 @@
+{
+  "domain": "moonboon",
+  "name": "Moonboon",
+  "bluetooth": [
+    {
+      "local_name": "Moonboon",
+      "connectable": true
+    }
+  ],
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/custom-components/moonboon",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.0.1"
+}

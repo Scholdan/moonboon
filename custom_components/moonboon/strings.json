@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "bluetooth_confirm": {
+        "title": "Add {name}",
+        "description": "Confirm the name and BLE address for this Moonboon motor. Address: {address}."
+      },
+      "pair_confirm": {
+        "title": "Pair {name}",
+        "description": "Press the physical pair button on the Moonboon motor at BLE address {address}. Then enable the checkbox and submit. Home Assistant will verify that it can connect before adding the device."
+      },
+      "user": {
+        "title": "Add Moonboon manually",
+        "description": "Enter the BLE address shown by Home Assistant Bluetooth discovery. You will be asked to press the physical pair button on the next step."
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect. Press the Moonboon pair button, move the Bluetooth proxy closer, then try again.",
+      "pair_required": "Press the physical Moonboon pair button, then enable the checkbox before submitting."
+    },
+    "abort": {
+      "already_configured": "This Moonboon is already configured."
+    }
+  }
+}

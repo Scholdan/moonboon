@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Home Assistant local state
+.storage/
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+
+# Reverse-engineering captures and logs
+captures/
+*.pcap
+*.cfa
+*.log
+*.zip
+
+# APK/repacking artifacts
+moonboon-apk/
+moonboon-apk-*/
+*.apk
+*.idsig
+*.keystore
+
+# Sniffer tooling and local virtualenvs
+sniffer/
+
+# Local reverse-engineering helpers
+capture_moonboon.py
+capture_moonboon_gadget.py
+summarize_nordic_pcap.py
+moonboon_payload.py
+frida-*.js
+
+# Raw local research notes
+moonboon-findings.md

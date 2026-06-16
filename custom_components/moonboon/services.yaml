@@ -1,0 +1,88 @@
+start:
+  fields:
+    address:
+      required: false
+      selector:
+        text:
+      example: "FC:05:80:87:08:F4"
+stop:
+  fields:
+    address:
+      required: false
+      selector:
+        text:
+      example: "FC:05:80:87:08:F4"
+set_program:
+  fields:
+    address:
+      required: false
+      selector:
+        text:
+      example: "FC:05:80:87:08:F4"
+    speed:
+      required: true
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: slider
+    duration:
+      required: true
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: minutes
+          mode: box
+    fade_out:
+      required: false
+      default: false
+      selector:
+        boolean:
+    fade_steps:
+      required: false
+      default: 12
+      selector:
+        number:
+          min: 1
+          max: 12
+          mode: box
+run_program:
+  fields:
+    address:
+      required: false
+      selector:
+        text:
+      example: "FC:05:80:87:08:F4"
+    speed:
+      required: true
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: slider
+    duration:
+      required: true
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: minutes
+          mode: box
+    fade_out:
+      required: false
+      default: false
+      selector:
+        boolean:
+    fade_steps:
+      required: false
+      default: 12
+      selector:
+        number:
+          min: 1
+          max: 12
+          mode: box
