@@ -32,7 +32,33 @@ bluetooth_proxy:
 
 ## Installation
 
-Copy the integration folder into Home Assistant:
+### HACS
+
+HACS is the recommended installation method.
+
+1. Open HACS in Home Assistant.
+2. Go to Integrations.
+3. Open the three-dot menu and select Custom repositories.
+4. Add this repository:
+
+```text
+https://github.com/Scholdan/moonboon
+```
+
+5. Select category `Integration`.
+6. Install Moonboon.
+7. Restart Home Assistant.
+8. Go to Settings -> Devices & services and add Moonboon.
+
+If you previously installed this integration manually, remove the old folder before installing through HACS:
+
+```text
+/config/custom_components/moonboon/
+```
+
+### Manual
+
+Copy `custom_components/moonboon/` from this repository into Home Assistant:
 
 ```text
 /config/custom_components/moonboon/
