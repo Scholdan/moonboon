@@ -46,7 +46,5 @@ class MoonboonRemainingSensor(MoonboonSensor):
         self._attr_unique_id = f"{device.address}_remaining"
 
     @property
-    def native_value(self) -> int | None:
-        if self.device.remaining is None:
-            return None
+    def native_value(self) -> int:
         return math.ceil(self.device.remaining / 60)

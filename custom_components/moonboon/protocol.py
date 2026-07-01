@@ -25,6 +25,11 @@ class CborReader:
         self.pos += count
         return out
 
+    def _peek(self) -> int:
+        if self.pos >= len(self.data):
+            raise ValueError("truncated CBOR")
+        return self.data[self.pos]
+
     def _read_len(self, ai: int) -> int | None:
         if ai < 24:
             return ai
@@ -46,6 +51,11 @@ class CborReader:
             raise ValueError("unexpected CBOR break")
         major = initial >> 5
         length = self._read_len(initial & 0x1f)
+        if length is None and major < 2:
+            raise ValueError("indefinite length is not valid for integers")
+        # ponytail: mixed-type chunks in indefinite strings still surface as
+        # TypeError; harmless behind decode_payload's callers, tighten if a
+        # future caller needs a strict ValueError contract.
 
         if major == 0:
             return length
@@ -54,7 +64,7 @@ class CborReader:
         if major == 2:
             if length is None:
                 chunks = []
-                while self.data[self.pos] != 0xff:
+                while self._peek() != 0xff:
                     chunks.append(self._read_item())
                 self.pos += 1
                 return b"".join(chunks)
@@ -62,7 +72,7 @@ class CborReader:
         if major == 3:
             if length is None:
                 chunks = []
-                while self.data[self.pos] != 0xff:
+                while self._peek() != 0xff:
                     chunks.append(self._read_item())
                 self.pos += 1
                 return "".join(chunks)
@@ -70,7 +80,7 @@ class CborReader:
         if major == 4:
             if length is None:
                 items = []
-                while self.data[self.pos] != 0xff:
+                while self._peek() != 0xff:
                     items.append(self._read_item())
                 self.pos += 1
                 return items
@@ -78,12 +88,14 @@ class CborReader:
         if major == 5:
             out = {}
             if length is None:
-                while self.data[self.pos] != 0xff:
-                    out[self._read_item()] = self._read_item()
+                while self._peek() != 0xff:
+                    key = self._read_item()
+                    out[key] = self._read_item()
                 self.pos += 1
                 return out
             for _ in range(length):
-                out[self._read_item()] = self._read_item()
+                key = self._read_item()
+                out[key] = self._read_item()
             return out
         if major == 7:
             if initial == 0xf4:

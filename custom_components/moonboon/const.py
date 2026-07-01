@@ -6,7 +6,6 @@ CONF_FADE_OUT = "fade_out"
 CONF_FADE_STEPS = "fade_steps"
 CONF_SPEED = "speed"
 
-DEFAULT_ADDRESS = "FC:05:80:87:08:F4"
 DEVICE_NAME = "Moonboon"
 
 SERVICE_UUID = "8d53dc1d-1db7-4cd3-868b-8a527460aa84"

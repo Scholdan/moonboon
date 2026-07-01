@@ -18,6 +18,11 @@ from .protocol import decode_payload
 _LOGGER = logging.getLogger(__name__)
 
 
+def _is_int(value: Any) -> bool:
+    # bool subclasses int; a CBOR false must not read as remaining == 0.
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 class MoonboonDevice:
     def __init__(self, hass: HomeAssistant, address: str, name: str = DEVICE_NAME) -> None:
         self.hass = hass
@@ -29,8 +34,8 @@ class MoonboonDevice:
         self.fade_steps = 12
         self.is_running = False
         self.state = "stopped"
-        self.remaining: int | None = self.duration_seconds
-        self.remaining_total: int | None = self.duration_seconds
+        self.remaining: int = 0
+        self.remaining_total: int = 0
         self.run_started_at: float | None = None
         self.last_decoded: object | None = None
         self.last_raw_notification: str | None = None
@@ -56,9 +61,15 @@ class MoonboonDevice:
 
         return remove
 
-    def _notify_listeners(self) -> None:
+    def notify_listeners(self) -> None:
         for listener in list(self._listeners):
             listener()
+
+    @property
+    def _run_total(self) -> int:
+        # Device-reported program length beats the locally configured duration
+        # for runs started outside Home Assistant.
+        return self.remaining_total or self.duration_seconds
 
     @property
     def is_connected(self) -> bool:
@@ -70,22 +81,22 @@ class MoonboonDevice:
         self.remaining = self.duration_seconds
         self.remaining_total = self.duration_seconds
         self.run_started_at = time.time()
-        self._notify_listeners()
+        self.notify_listeners()
 
     def mark_stopped(self) -> None:
         self.is_running = False
         self.state = "stopped"
         self.remaining = 0
         self.run_started_at = None
-        self._notify_listeners()
+        self.notify_listeners()
 
     async def update_countdown(self) -> None:
         if not self.is_running or self.run_started_at is None:
             return
-        remaining = max(0, self.duration_seconds - int(time.time() - self.run_started_at))
+        remaining = max(0, self._run_total - int(time.time() - self.run_started_at))
         if remaining != self.remaining:
             self.remaining = remaining
-            self._notify_listeners()
+            self.notify_listeners()
         if remaining == 0:
             self.mark_stopped()
             await self.disconnect()
@@ -98,7 +109,7 @@ class MoonboonDevice:
             _LOGGER.debug("Could not decode Moonboon notification %s: %s", raw.hex(" "), err)
             return
         self.last_decoded = decoded
-        _LOGGER.info("Moonboon decoded notification: %r", decoded)
+        _LOGGER.debug("Moonboon decoded notification: %r", decoded)
         if not isinstance(decoded, dict):
             return
         changed = False
@@ -113,22 +124,22 @@ class MoonboonDevice:
                 self.run_started_at = None
                 self.hass.async_create_task(self.disconnect())
             changed = True
-        if isinstance(decoded.get("remaining"), int):
+        if _is_int(decoded.get("remaining total")):
+            self.remaining_total = decoded["remaining total"]
+            changed = True
+        if _is_int(decoded.get("remaining")):
             self.remaining = decoded["remaining"]
             if self.is_running:
-                self.run_started_at = time.time() - max(0, self.duration_seconds - self.remaining)
+                self.run_started_at = time.time() - max(0, self._run_total - self.remaining)
             if self.remaining == 0:
                 self.is_running = False
                 self.state = "stopped"
                 self.run_started_at = None
                 self.hass.async_create_task(self.disconnect())
             changed = True
-        if isinstance(decoded.get("remaining total"), int):
-            self.remaining_total = decoded["remaining total"]
-            changed = True
         # Notification duration appears to be runtime/status data, not the configured timer.
         if changed:
-            self._notify_listeners()
+            self.notify_listeners()
 
     async def ensure_connected(self, action: str) -> None:
         if self._client and self._client.is_connected and self._notify_started:
@@ -142,7 +153,7 @@ class MoonboonDevice:
                 f"Moonboon {self.address} is not visible to Home Assistant Bluetooth"
             )
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Connecting to Moonboon %s for %s via %s",
             self.address,
             action,
@@ -151,7 +162,7 @@ class MoonboonDevice:
 
         def notification_handler(_sender: int, data: bytearray) -> None:
             raw = bytes(data)
-            _LOGGER.info("Moonboon notification: %s", raw.hex(" "))
+            _LOGGER.debug("Moonboon notification: %s", raw.hex(" "))
             self._handle_notification(raw)
 
         self._client = await establish_connection(
@@ -221,7 +232,7 @@ class MoonboonDevice:
 
                 wrote_any = False
                 for payload in payloads:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "Writing Moonboon %s payload: %s", action, payload.hex(" ")
                     )
                     await client.write_gatt_char(CHARACTERISTIC_UUID, payload, response=False)

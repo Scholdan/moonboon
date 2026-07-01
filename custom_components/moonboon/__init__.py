@@ -7,10 +7,10 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_NAME, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
-    DEFAULT_ADDRESS,
     DEVICE_NAME,
     DOMAIN,
     PAYLOADS,
@@ -33,12 +33,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         payloads = [PAYLOADS[command]]
         if command == "start":
             payloads.insert(0, PAYLOADS["restart"])
-        await device.send_payloads(
-            command,
-            payloads,
-            keep_connected=False,
-            force_reconnect=command == "check_state",
-        )
+        await device.send_payloads(command, payloads, keep_connected=False)
         if command == "start":
             device.mark_running()
         elif command == "stop":
@@ -49,20 +44,29 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         device = _device_from_call(hass, call)
         speed = int(call.data.get("speed", device.speed))
         duration = int(call.data.get("duration", device.duration))
-        fade_out_value = call.data.get("fade_out", device.fade_out_enabled)
-        fade_out = duration if _as_bool(fade_out_value) else 0
+        fade_out_enabled = _as_bool(call.data.get("fade_out", device.fade_out_enabled))
+        fade_out = duration if fade_out_enabled else 0
         fade_steps = int(call.data.get("fade_steps", device.fade_steps))
         sequence = build_sequence_payload(speed, duration, fade_out, fade_steps)
         payloads = [sequence]
         if service == "run_program":
             payloads = [PAYLOADS["restart"], sequence, PAYLOADS["start"]]
         await device.send_payloads(service, payloads, keep_connected=False)
-        if service == "run_program":
+        # Persist only the fields this call named: defaults captured before the
+        # BLE await must not clobber concurrent entity changes.
+        duration_changed = duration != device.duration
+        if "speed" in call.data:
             device.speed = speed
+        if "duration" in call.data:
             device.duration = duration
-            device.fade_out_enabled = _as_bool(fade_out_value)
+        if "fade_out" in call.data:
+            device.fade_out_enabled = fade_out_enabled
+        if "fade_steps" in call.data:
             device.fade_steps = fade_steps
+        if service == "run_program" or (device.is_running and duration_changed):
             device.mark_running()
+        else:
+            device.notify_listeners()
 
     for service in ("start", "stop"):
         hass.services.async_register(DOMAIN, service, handle_command)
@@ -121,10 +125,14 @@ def _device_from_call(hass: HomeAssistant, call: ServiceCall) -> MoonboonDevice:
         for device in devices.values():
             if device.address == wanted:
                 return device
-        return MoonboonDevice(hass, wanted)
-    if devices:
+        raise HomeAssistantError(f"No configured Moonboon with address {wanted}")
+    if len(devices) == 1:
         return next(iter(devices.values()))
-    return MoonboonDevice(hass, DEFAULT_ADDRESS)
+    if devices:
+        raise HomeAssistantError(
+            "Multiple Moonboon devices are configured; pass an address"
+        )
+    raise HomeAssistantError("No Moonboon devices are configured")
 
 
 def _as_bool(value: Any) -> bool:
