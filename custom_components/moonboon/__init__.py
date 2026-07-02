@@ -104,7 +104,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(
         async_track_time_interval(hass, update_countdown, timedelta(seconds=60))
     )
-    entry.async_on_unload(lambda: hass.async_create_task(device.disconnect()))
+    entry.async_on_unload(device.disconnect)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
