@@ -1,6 +1,7 @@
 """Self-check for the Moonboon CBOR codec. Run with pytest or plain python."""
 import importlib.util
 import pathlib
+import sys
 
 def _load(name):
     spec = importlib.util.spec_from_file_location(
@@ -8,6 +9,7 @@ def _load(name):
         pathlib.Path(__file__).parent.parent / f"custom_components/moonboon/{name}.py",
     )
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -63,6 +65,30 @@ def test_malformed_cbor_raises_value_error():
         except ValueError:
             continue
         raise AssertionError(f"CBOR body {body} did not raise ValueError")
+
+
+def test_frames_reassemble_and_route_by_command_and_sequence():
+    status = protocol.build_read_payload(3)
+    reply = bytes.fromhex("09 00 00 06 00 41 07 03 bf 62 72 63 00 ff")
+    push = bytes.fromhex("00 00 00 06 00 41 00 05 bf 62 72 63 00 ff")
+    frames = protocol.SmpFrameReader()
+    assert frames.feed(reply[:10]) == []
+    parsed = frames.feed(reply[10:] + push)
+    assert [(frame.op, frame.command, frame.sequence) for frame in parsed] == [
+        (1, 3, 7),
+        (0, 5, 0),
+    ]
+    assert parsed[0].payload == {"rc": 0}
+    assert protocol.with_sequence(status, 7)[6] == 7
+    assert status[6] == 0
+
+
+def test_frame_reader_recovers_from_corruption():
+    frame = bytes.fromhex("03 00 00 06 00 41 01 01 bf 62 72 63 00 ff")
+    frames = protocol.SmpFrameReader()
+    assert frames.feed(b"\xff" * 3 + b"\x03\x00\xff\xff\x00\x41\x01\x01" + frame) == [
+        protocol.SmpFrame(3, 1, 1, {"rc": 0})
+    ]
 
 
 if __name__ == "__main__":

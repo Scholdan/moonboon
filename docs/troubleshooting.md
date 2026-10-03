@@ -32,6 +32,9 @@ If setup still fails:
 - Turn off Bluetooth on the phone temporarily.
 - Close the Moonboon app.
 - Retry while the motor is still in pairing mode.
+- Update the ESPHome Bluetooth Proxy firmware if Home Assistant reports that pairing is unsupported.
+
+Setup must establish a Bluetooth bond and read device information, not just open a connection. If an already-configured motor remains visible but repeatedly refuses connections, Home Assistant will offer a re-pair flow. Press the motor's pair button and follow that flow; you do not need to delete the integration.
 
 ## Multiple Moonboon Motors Look Similar
 
@@ -54,6 +57,7 @@ If start still fails:
 - Try again after a few seconds.
 - Make sure the motor is not connected to the phone app.
 - Check Home Assistant logs for BLE connection errors.
+- Check whether the motor needs weight in the cradle; it can acknowledge start without moving.
 
 ## Manual Stop Still Shows Running
 

@@ -6,8 +6,8 @@ This is an unofficial reverse-engineered integration.
 
 ## Features
 
-- Bluetooth discovery for connectable devices named `Moonboon`.
-- Pairing-aware setup flow with instructions to press the physical motor pair button.
+- Bluetooth discovery for connectable devices with names starting `Moonboon`.
+- Setup that bonds with the motor and reads device information; re-pairing when repeated connections fail.
 - Main on/off switch.
 - Speed control, `1` to `100`.
 - Duration control in minutes, `1` to `720` / 12 hours.
@@ -16,6 +16,7 @@ This is an unofficial reverse-engineered integration.
 - Automatic state polling every 30 seconds.
 - Local remaining-time countdown once per minute.
 - Supports ESPHome Bluetooth Proxy.
+- Matches BLE replies to requests and handles notifications split across packets.
 
 ## Requirements
 
@@ -82,7 +83,9 @@ Restart Home Assistant.
 4. Confirm the BLE address and name.
 5. On the pairing step, press the physical pair button on the Moonboon motor.
 6. Tick the checkbox and submit.
-7. Home Assistant verifies the BLE connection before creating the device.
+7. Home Assistant waits for the motor to advertise, bonds, and reads its device information before creating the device.
+
+Keep the motor in pairing mode until setup finishes. An ESPHome Bluetooth Proxy must support pairing; if yours does not, update its firmware or use a local Bluetooth adapter. After three consecutive connection failures while the motor is still visible, Home Assistant offers a re-pair flow. A full Home Assistant restart is required after upgrading this integration.
 
 If you have multiple Moonboon motors, use the BLE address shown in the setup flow to identify the correct one.
 
@@ -98,14 +101,16 @@ The integration creates a Home Assistant device with these entities:
 
 ## Behavior
 
-Starting sends an internal restart before applying the program and start command. This matches observed behavior where the motor may reject a new start after a recent stop unless reset first.
+Starting reads the current state, sends a stop if already running or a restart otherwise, then applies the program and starts. The integration checks command replies and reads the motor state again before reporting success. If the motor refuses to run (for example, when the cradle is empty), Home Assistant shows an error instead of claiming it started.
+
+Fade-out still spans the full selected duration; upgrading does not change the existing fade-out switch or `fade_steps` service parameter.
 
 The integration uses short BLE sessions:
 
 - Connect.
 - Subscribe briefly to notifications.
 - Write command or poll state.
-- Read any notifications.
+- Reassemble notifications and match each reply to its command.
 - Disconnect.
 
 State polling runs every 30 seconds. Remaining time is also counted down locally once per minute.

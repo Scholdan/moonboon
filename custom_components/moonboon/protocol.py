@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 
 COMMAND_PREFIX = bytes.fromhex("0a 00")
@@ -8,6 +9,56 @@ COMMAND_SUFFIX = bytes.fromhex("00 41 00 01")
 SEQUENCE_PREFIX = bytes.fromhex("0a 00")
 SEQUENCE_SUFFIX = bytes.fromhex("00 41 00 02")
 MAX_SEQUENCE_PAYLOAD_LEN = 239
+MAX_NOTIFICATION_BODY_LEN = 1024
+SMP_GROUP = 65
+
+
+@dataclass(frozen=True)
+class SmpFrame:
+    op: int
+    command: int
+    sequence: int
+    payload: dict
+
+
+class SmpFrameReader:
+    """Collect complete SMP frames from fragmented or combined BLE notifications."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+
+    def reset(self) -> None:
+        self._buffer.clear()
+
+    def feed(self, data: bytes) -> list[SmpFrame]:
+        self._buffer.extend(data)
+        frames = []
+        while len(self._buffer) >= 8:
+            op = self._buffer[0] & 7
+            length = int.from_bytes(self._buffer[2:4], "big")
+            if (
+                op > 3
+                or self._buffer[0] >> 5
+                or self._buffer[1] != 0
+                or int.from_bytes(self._buffer[4:6], "big") != SMP_GROUP
+                or length > MAX_NOTIFICATION_BODY_LEN
+            ):
+                del self._buffer[0]
+                continue
+            total = 8 + length
+            if len(self._buffer) < total:
+                break
+            raw = bytes(self._buffer[:total])
+            del self._buffer[:total]
+            try:
+                reader = CborReader(raw[8:])
+                payload = reader.read()
+                if not isinstance(payload, dict) or reader.pos != length:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            frames.append(SmpFrame(op, raw[7], raw[6], payload))
+        return frames
 
 
 class CborReader:
@@ -167,6 +218,19 @@ def encode_indefinite_step(speed: int, timer: int) -> bytes:
 
 def moonboon_payload(prefix: bytes, suffix: bytes, body: bytes) -> bytes:
     return prefix + len(body).to_bytes(2, "big") + suffix + body
+
+
+def with_sequence(payload: bytes, sequence: int) -> bytes:
+    """Set the SMP request ID; zero is reserved for unsolicited pushes."""
+    if not 1 <= sequence <= 255 or len(payload) < 8:
+        raise ValueError("invalid SMP request")
+    return payload[:6] + bytes([sequence]) + payload[7:]
+
+
+def build_read_payload(command: int) -> bytes:
+    if not 0 <= command <= 255:
+        raise ValueError("invalid SMP command")
+    return moonboon_payload(b"\x08\x00", b"\x00\x41\x00" + bytes([command]), b"\xa0")
 
 
 def build_command_payload(command: str) -> bytes:

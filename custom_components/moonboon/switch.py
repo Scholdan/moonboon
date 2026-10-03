@@ -50,20 +50,17 @@ class MoonboonRunSwitch(MoonboonEntity, SwitchEntity):
         )
         await self.device.send_payloads(
             "run_program",
-            [PAYLOADS["restart"], sequence, PAYLOADS["start"]],
+            [sequence, PAYLOADS["start"]],
             keep_connected=False,
         )
-        self.device.mark_running()
-        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         await self.device.send_payloads("stop", [PAYLOADS["stop"]], keep_connected=False)
-        self.device.mark_stopped()
-        self.async_write_ha_state()
 
 
 class MoonboonFadeOutSwitch(MoonboonEntity, SwitchEntity):
     _attr_name = "Fade Out"
+    _remove_listener: Callable[[], None] | None = None
 
     def __init__(self, entry: ConfigEntry, device: MoonboonDevice) -> None:
         super().__init__(entry, device)
@@ -73,15 +70,29 @@ class MoonboonFadeOutSwitch(MoonboonEntity, SwitchEntity):
     def is_on(self) -> bool:
         return self.device.fade_out_enabled
 
+    async def async_added_to_hass(self) -> None:
+        self._remove_listener = self.device.add_listener(self.async_write_ha_state)
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener is not None:
+            self._remove_listener()
+            self._remove_listener = None
+
     async def async_turn_on(self, **kwargs) -> None:
-        self.device.fade_out_enabled = True
-        await self._maybe_update_running_program()
-        self.async_write_ha_state()
+        await self._set_fade_out(True)
 
     async def async_turn_off(self, **kwargs) -> None:
-        self.device.fade_out_enabled = False
-        await self._maybe_update_running_program()
-        self.async_write_ha_state()
+        await self._set_fade_out(False)
+
+    async def _set_fade_out(self, enabled: bool) -> None:
+        previous = self.device.fade_out_enabled
+        self.device.fade_out_enabled = enabled
+        try:
+            await self._maybe_update_running_program()
+        except Exception:
+            self.device.fade_out_enabled = previous
+            raise
+        self.device.notify_listeners()
 
     async def _maybe_update_running_program(self) -> None:
         if not self.device.is_running:

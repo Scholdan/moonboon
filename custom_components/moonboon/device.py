@@ -12,8 +12,8 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import CHARACTERISTIC_UUID, DEVICE_NAME, SERVICE_UUID
-from .protocol import decode_payload
+from .const import CHARACTERISTIC_UUID, DEVICE_NAME, PAYLOADS, SERVICE_UUID
+from .protocol import SmpFrameReader, build_read_payload, with_sequence
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +21,14 @@ _LOGGER = logging.getLogger(__name__)
 def _is_int(value: Any) -> bool:
     # bool subclasses int; a CBOR false must not read as remaining == 0.
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+class MoonboonConnectionError(HomeAssistantError):
+    """A BLE connection or request failed, rather than a motor command."""
+
+
+class MoonboonPairingUnsupported(HomeAssistantError):
+    """The active adapter or proxy cannot initiate bonding."""
 
 
 class MoonboonDevice:
@@ -43,6 +51,9 @@ class MoonboonDevice:
         self._notify_started = False
         self._lock = asyncio.Lock()
         self._listeners: list[Callable[[], None]] = []
+        self._frames = SmpFrameReader()
+        self._pending: tuple[int, int, int, asyncio.Future[dict]] | None = None
+        self._sequence = 1
 
     @property
     def fade_out(self) -> int:
@@ -75,14 +86,6 @@ class MoonboonDevice:
     def is_connected(self) -> bool:
         return bool(self._client and self._client.is_connected)
 
-    def mark_running(self) -> None:
-        self.is_running = True
-        self.state = "running"
-        self.remaining = self.duration_seconds
-        self.remaining_total = self.duration_seconds
-        self.run_started_at = time.time()
-        self.notify_listeners()
-
     def mark_stopped(self) -> None:
         self.is_running = False
         self.state = "stopped"
@@ -101,18 +104,8 @@ class MoonboonDevice:
             self.mark_stopped()
             await self.disconnect()
 
-    def _handle_notification(self, raw: bytes) -> None:
-        self.last_raw_notification = raw.hex(" ")
-        try:
-            decoded = decode_payload(raw)
-        except Exception as err:
-            _LOGGER.debug("Could not decode Moonboon notification %s: %s", raw.hex(" "), err)
-            return
-        self.last_decoded = decoded
-        _LOGGER.debug("Moonboon decoded notification: %r", decoded)
-        if not isinstance(decoded, dict):
-            return
-        changed = False
+    def _apply_status(self, decoded: dict) -> None:
+        """Apply a complete status response, never a command acknowledgement."""
         state = decoded.get("state")
         if isinstance(state, str):
             self.state = state
@@ -122,34 +115,45 @@ class MoonboonDevice:
             if not self.is_running:
                 self.remaining = 0
                 self.run_started_at = None
-                self.hass.async_create_task(self.disconnect())
-            changed = True
         if _is_int(decoded.get("remaining total")):
             self.remaining_total = decoded["remaining total"]
-            changed = True
         if _is_int(decoded.get("remaining")):
-            self.remaining = decoded["remaining"]
+            self.remaining = decoded["remaining"] if self.is_running else 0
             if self.is_running:
-                self.run_started_at = time.time() - max(0, self._run_total - self.remaining)
-            if self.remaining == 0:
-                self.is_running = False
-                self.state = "stopped"
-                self.run_started_at = None
-                self.hass.async_create_task(self.disconnect())
-            changed = True
-        # Notification duration appears to be runtime/status data, not the configured timer.
-        if changed:
-            self.notify_listeners()
+                self.run_started_at = time.time() - max(
+                    0, self._run_total - self.remaining
+                )
+        self.notify_listeners()
+
+    def _handle_notification(self, raw: bytes) -> None:
+        self.last_raw_notification = raw.hex(" ")
+        for frame in self._frames.feed(raw):
+            self.last_decoded = frame.payload
+            _LOGGER.debug("Moonboon decoded notification: %r", frame.payload)
+            if frame.command == 5 and frame.sequence == 0:
+                if frame.payload.get("ur") == "ustop":
+                    self.state = "stopped (user)"
+                    self.is_running = False
+                    self.remaining = 0
+                    self.run_started_at = None
+                    self.notify_listeners()
+                continue
+            pending = self._pending
+            if pending and (frame.sequence, frame.op, frame.command) == pending[:3]:
+                if not pending[3].done():
+                    pending[3].set_result(frame.payload)
 
     async def ensure_connected(self, action: str) -> None:
         if self._client and self._client.is_connected and self._notify_started:
             return
+        if self._client is not None:
+            await self._disconnect_unlocked()
 
         ble_device = bluetooth.async_ble_device_from_address(
             self.hass, self.address, connectable=True
         )
         if ble_device is None:
-            raise HomeAssistantError(
+            raise MoonboonConnectionError(
                 f"Moonboon {self.address} is not visible to Home Assistant Bluetooth"
             )
 
@@ -165,46 +169,123 @@ class MoonboonDevice:
             _LOGGER.debug("Moonboon notification: %s", raw.hex(" "))
             self._handle_notification(raw)
 
-        self._client = await establish_connection(
-            BleakClientWithServiceCache,
-            ble_device,
-            self.name,
-            ble_device_callback=lambda: bluetooth.async_ble_device_from_address(
-                self.hass, self.address, connectable=True
-            ),
-        )
-
-        services = self._client.services
-        if services is None and hasattr(self._client, "get_services"):
-            services = await self._client.get_services()
-        if services is None:
-            raise HomeAssistantError("Moonboon GATT services were not available")
-        if services.get_service(SERVICE_UUID) is None:
-            raise HomeAssistantError(
-                f"Moonboon service {SERVICE_UUID} was not discovered on {self.address}"
-            )
-        if services.get_characteristic(CHARACTERISTIC_UUID) is None:
-            raise HomeAssistantError(
-                f"Moonboon characteristic {CHARACTERISTIC_UUID} was not discovered on {self.address}"
+        self._frames.reset()
+        try:
+            self._client = await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                self.name,
+                ble_device_callback=lambda: bluetooth.async_ble_device_from_address(
+                    self.hass, self.address, connectable=True
+                ),
+                timeout=20,
             )
 
-        await self._client.start_notify(CHARACTERISTIC_UUID, notification_handler)
-        self._notify_started = True
+            services = self._client.services
+            if services is None and hasattr(self._client, "get_services"):
+                services = await self._client.get_services()
+            if services is None:
+                raise HomeAssistantError("Moonboon GATT services were not available")
+            if services.get_service(SERVICE_UUID) is None:
+                raise HomeAssistantError(
+                    f"Moonboon service {SERVICE_UUID} was not discovered on {self.address}"
+                )
+            if services.get_characteristic(CHARACTERISTIC_UUID) is None:
+                raise HomeAssistantError(
+                    f"Moonboon characteristic {CHARACTERISTIC_UUID} was not discovered on {self.address}"
+                )
+
+            await self._client.start_notify(CHARACTERISTIC_UUID, notification_handler)
+            self._notify_started = True
+        except BaseException:
+            await self._disconnect_unlocked()
+            raise
 
     async def disconnect(self) -> None:
         async with self._lock:
-            if self._client is None:
-                return
-            client = self._client
-            self._client = None
-            self._notify_started = False
-            if not client.is_connected:
-                return
+            await self._disconnect_unlocked()
+
+    async def _disconnect_unlocked(self) -> None:
+        client, self._client = self._client, None
+        was_notifying = self._notify_started
+        self._notify_started = False
+        self._frames.reset()
+        if self._pending is not None:
+            future = self._pending[3]
+            if not future.done():
+                future.cancel()
+            self._pending = None
+        if client is None:
+            return
+        if client.is_connected and was_notifying:
             try:
                 await client.stop_notify(CHARACTERISTIC_UUID)
             except Exception as err:
                 _LOGGER.debug("Moonboon stop_notify failed for %s: %s", self.address, err)
+        try:
             await client.disconnect()
+        except Exception as err:
+            _LOGGER.debug("Moonboon disconnect failed for %s: %s", self.address, err)
+
+    async def _request_unlocked(self, payload: bytes, action: str) -> dict:
+        client = self._client
+        if client is None or not client.is_connected:
+            raise MoonboonConnectionError("Moonboon BLE connection was lost")
+        sequence = self._sequence
+        self._sequence = sequence % 255 + 1
+        command = payload[7]
+        reply_op = 1 if payload[0] & 7 == 0 else 3
+        future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
+        self._pending = (sequence, reply_op, command, future)
+        try:
+            request = with_sequence(payload, sequence)
+            _LOGGER.debug("Writing Moonboon %s payload: %s", action, request.hex(" "))
+            await client.write_gatt_char(CHARACTERISTIC_UUID, request, response=False)
+            result = await asyncio.wait_for(future, timeout=8)
+        except TimeoutError as err:
+            raise MoonboonConnectionError(f"Moonboon {action} response timed out") from err
+        finally:
+            self._pending = None
+        rc = result.get("rc", 0)
+        if rc != 0 and not (rc == 6 and action in ("restart", "stop")):
+            raise HomeAssistantError(f"Moonboon {action} rejected the command (rc={rc})")
+        return result
+
+    async def _read_status_unlocked(self) -> dict:
+        status = await self._request_unlocked(build_read_payload(3), "check_state")
+        if not isinstance(status.get("state"), str):
+            raise HomeAssistantError("Moonboon did not report a motor state")
+        self._apply_status(status)
+        return status
+
+    async def pair(self) -> None:
+        """Bond and verify the motor answers an information request."""
+        async with self._lock:
+            try:
+                await self.ensure_connected("pair")
+                try:
+                    await asyncio.wait_for(self._client.pair(), timeout=30)
+                except NotImplementedError as err:
+                    raise MoonboonPairingUnsupported(
+                        "This Bluetooth adapter or ESPHome proxy does not support pairing"
+                    ) from err
+                except TimeoutError as err:
+                    raise MoonboonConnectionError("Moonboon pairing timed out") from err
+                except Exception as err:
+                    # Some adapters bond during connect and reject a second pair().
+                    _LOGGER.warning(
+                        "Moonboon explicit pairing failed; checking connection: %s",
+                        err,
+                    )
+                info = await self._request_unlocked(build_read_payload(0), "device_info")
+                if not info.get("hw") and not info.get("fw"):
+                    raise HomeAssistantError("Moonboon did not return device information")
+            except (MoonboonPairingUnsupported, HomeAssistantError):
+                raise
+            except Exception as err:
+                raise MoonboonConnectionError(f"Moonboon pairing failed: {err}") from err
+            finally:
+                await self._disconnect_unlocked()
 
     async def send_payloads(
         self,
@@ -213,56 +294,51 @@ class MoonboonDevice:
         keep_connected: bool | None = None,
         force_reconnect: bool = False,
     ) -> None:
-        if keep_connected is None:
-            keep_connected = False
-
-        if force_reconnect:
-            await self.disconnect()
-        if action == "check_state":
-            self.last_raw_notification = None
-            self.last_decoded = None
-
-        try:
-            notification_count = 0
-            async with self._lock:
+        async with self._lock:
+            try:
+                if force_reconnect:
+                    await self._disconnect_unlocked()
+                if action == "check_state":
+                    self.last_raw_notification = None
+                    self.last_decoded = None
                 await self.ensure_connected(action)
-                client = self._client
-                if client is None:
-                    raise HomeAssistantError("Moonboon BLE client was not available")
-
-                wrote_any = False
+                if action in ("start", "run_program"):
+                    status = await self._read_status_unlocked()
+                    preamble = "stop" if status["state"] == "running" else "restart"
+                    await self._request_unlocked(PAYLOADS[preamble], preamble)
+                    await asyncio.sleep(0.3)
                 for payload in payloads:
-                    _LOGGER.debug(
-                        "Writing Moonboon %s payload: %s", action, payload.hex(" ")
+                    command = (
+                        "check_state" if payload[0] & 7 == 0
+                        else "stop" if payload == PAYLOADS["stop"]
+                        else action
                     )
-                    await client.write_gatt_char(CHARACTERISTIC_UUID, payload, response=False)
-                    wrote_any = True
+                    result = await self._request_unlocked(payload, command)
+                    if command == "check_state":
+                        if not isinstance(result.get("state"), str):
+                            raise HomeAssistantError("Moonboon did not report a motor state")
+                        self._apply_status(result)
+                if action in ("start", "run_program"):
+                    await asyncio.sleep(1.5)
+                    status = await self._read_status_unlocked()
+                    if not self.is_running:
+                        raise HomeAssistantError(
+                            "Moonboon did not start; the motor needs weight in the cradle"
+                        )
+                elif action == "stop":
                     await asyncio.sleep(0.2)
-
-                if not wrote_any:
-                    await asyncio.sleep(1)
-                elif not keep_connected:
-                    await asyncio.sleep(2)
-
-                notification_count = 1 if self.last_raw_notification else 0
-
-            if action == "check_state":
-                _LOGGER.debug(
-                    "Moonboon check_state result for %s: notifications_seen=%s last_raw=%s last_decoded=%r running=%s remaining=%s",
-                    self.address,
-                    notification_count,
-                    self.last_raw_notification,
-                    self.last_decoded,
-                    self.is_running,
-                    self.remaining,
-                )
-
-        except Exception as err:
-            raise HomeAssistantError(
-                f"Moonboon {action} failed before/during BLE write: {err}. "
-                "If this is ESP_GATT_CONN_FAIL_ESTABLISH, move the ESPHome proxy closer, "
-                "disable the phone Bluetooth/Moonboon app, and confirm bluetooth_proxy active connections are enabled."
-            ) from err
-        finally:
-            if not keep_connected:
-                await self.disconnect()
+                    await self._read_status_unlocked()
+                    if self.is_running:
+                        raise HomeAssistantError("Moonboon is still running after stop")
+                elif action == "set_program" and self.is_running:
+                    await self._read_status_unlocked()
+            except HomeAssistantError:
+                raise
+            except Exception as err:
+                raise MoonboonConnectionError(
+                    f"Moonboon {action} failed ({type(err).__name__}: {err}). "
+                    "Check proxy range, active connections and whether the phone app is connected."
+                ) from err
+            finally:
+                if not keep_connected:
+                    await self._disconnect_unlocked()

@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_NAME, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -17,7 +18,7 @@ from .const import (
     POLL_INTERVAL_SECONDS,
     PROGRAM_SERVICES,
 )
-from .device import MoonboonDevice
+from .device import MoonboonConnectionError, MoonboonDevice
 from .protocol import build_sequence_payload
 
 PLATFORMS = (Platform.SWITCH, Platform.NUMBER, Platform.SENSOR)
@@ -30,14 +31,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     async def handle_command(call: ServiceCall) -> None:
         command = call.service
         device = _device_from_call(hass, call)
-        payloads = [PAYLOADS[command]]
-        if command == "start":
-            payloads.insert(0, PAYLOADS["restart"])
-        await device.send_payloads(command, payloads, keep_connected=False)
-        if command == "start":
-            device.mark_running()
-        elif command == "stop":
-            device.mark_stopped()
+        await device.send_payloads(command, [PAYLOADS[command]], keep_connected=False)
 
     async def handle_program(call: ServiceCall) -> None:
         service = call.service
@@ -50,11 +44,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         sequence = build_sequence_payload(speed, duration, fade_out, fade_steps)
         payloads = [sequence]
         if service == "run_program":
-            payloads = [PAYLOADS["restart"], sequence, PAYLOADS["start"]]
+            payloads = [sequence, PAYLOADS["start"]]
         await device.send_payloads(service, payloads, keep_connected=False)
         # Persist only the fields this call named: defaults captured before the
         # BLE await must not clobber concurrent entity changes.
-        duration_changed = duration != device.duration
         if "speed" in call.data:
             device.speed = speed
         if "duration" in call.data:
@@ -63,10 +56,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             device.fade_out_enabled = fade_out_enabled
         if "fade_steps" in call.data:
             device.fade_steps = fade_steps
-        if service == "run_program" or (device.is_running and duration_changed):
-            device.mark_running()
-        else:
-            device.notify_listeners()
+        device.notify_listeners()
 
     for service in ("start", "stop"):
         hass.services.async_register(DOMAIN, service, handle_command)
@@ -81,8 +71,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     name = entry.data.get(CONF_NAME, DEVICE_NAME)
     device = MoonboonDevice(hass, address, name)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = device
+    connection_failures = 0
 
     async def poll_state(_now) -> None:
+        nonlocal connection_failures
         try:
             await device.send_payloads(
                 "check_state",
@@ -90,6 +82,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 keep_connected=False,
                 force_reconnect=True,
             )
+            connection_failures = 0
+        except MoonboonConnectionError as err:
+            if bluetooth.async_ble_device_from_address(hass, address, connectable=True):
+                connection_failures += 1
+                if connection_failures == 3:
+                    _LOGGER.warning(
+                        "Moonboon %s may have lost its pairing: %s", address, err
+                    )
+                    entry.async_start_reauth(hass)
+            else:
+                connection_failures = 0
+            _LOGGER.debug("Moonboon polling failed for %s: %s", address, err)
         except Exception as err:
             _LOGGER.debug("Moonboon polling failed for %s: %s", device.address, err)
 
@@ -104,8 +108,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(
         async_track_time_interval(hass, update_countdown, timedelta(seconds=60))
     )
-    entry.async_on_unload(device.disconnect)
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -113,6 +115,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
+        await hass.data[DOMAIN][entry.entry_id].disconnect()
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unloaded
 

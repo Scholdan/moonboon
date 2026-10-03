@@ -58,7 +58,7 @@ Writes and notifications both use the same characteristic.
 
 The motor is pairing-aware. Home Assistant / ESPHome Bluetooth Proxy failed to establish a connection until the physical Moonboon pair button was pressed.
 
-The integration setup flow therefore asks the user to press the pair button before it verifies the BLE connection and creates the device.
+The integration setup flow asks the user to press the pair button, explicitly initiates bonding, and reads device information before creating the device. A successful connection while still in pairing mode does not by itself prove that a bond will survive after pairing mode ends; test a reconnect outside pairing mode on each adapter/proxy setup.
 
 ## Payload Format
 
@@ -70,7 +70,8 @@ Header fields observed:
 byte 0:     kind
 bytes 2-3: big-endian CBOR body length
 bytes 4-5: group, observed 0x0041
-byte 7:     channel
+byte 6:     request sequence (zero is reserved for unsolicited notifications)
+byte 7:     command number
 bytes 8..:  CBOR body
 ```
 
@@ -201,6 +202,8 @@ Observed running-state notification:
 ```
 
 Status notifications report remaining time in seconds, while configured program timers are in minutes.
+
+Responses can be split across BLE notifications, and each request must match the response sequence, operation, and command. `rc: 0` does not prove the motor moved; read state after starting. A stopped motor may answer `rc: 6` to stop or restart. The integration retains its original whole-duration fade-out ramp rather than the official app's short end-of-program ramp.
 
 ## Capture Method
 

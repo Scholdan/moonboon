@@ -7,7 +7,13 @@
       },
       "pair_confirm": {
         "title": "Pair {name}",
-        "description": "Press the physical pair button on the Moonboon motor at BLE address {address}. Then enable the checkbox and submit. Home Assistant will verify that it can connect before adding the device."
+        "description": "Press the physical pair button on the Moonboon motor at BLE address {address}. Then enable the checkbox and submit. Home Assistant will bond with the motor and read its device information before adding it.",
+        "data": {"pair_button_pressed": "I pressed the pair button"}
+      },
+      "reauth_confirm": {
+        "title": "Re-pair {name}",
+        "description": "The connection to Moonboon {address} keeps failing. Press the physical pair button, enable the checkbox, and submit to bond again.",
+        "data": {"pair_button_pressed": "I pressed the pair button"}
       },
       "user": {
         "title": "Add Moonboon manually",
@@ -16,7 +22,9 @@
     },
     "error": {
       "cannot_connect": "Could not connect. Press the Moonboon pair button, move the Bluetooth proxy closer, then try again.",
-      "pair_required": "Press the physical Moonboon pair button, then enable the checkbox before submitting."
+      "pair_required": "Press the physical Moonboon pair button, then enable the checkbox before submitting.",
+      "not_found": "Moonboon was not seen after entering pairing mode. Check the address and Bluetooth range, then try again.",
+      "pairing_unsupported": "This Bluetooth adapter or ESPHome proxy cannot initiate pairing. Update the proxy firmware or try a local adapter."
     },
     "abort": {
       "already_configured": "This Moonboon is already configured."

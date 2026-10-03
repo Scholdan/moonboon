@@ -72,15 +72,20 @@ class MoonboonNumber(MoonboonEntity, NumberEntity):
             self._remove_listener = None
 
     async def async_set_native_value(self, value: float) -> None:
+        previous = getattr(self.device, self.description.key)
         setattr(self.device, self.description.key, int(value))
-        if self.device.is_running:
-            sequence = build_sequence_payload(
-                self.device.speed,
-                self.device.duration,
-                self.device.fade_out,
-                self.device.fade_steps,
-            )
-            await self.device.send_payloads("set_program", [sequence], keep_connected=False)
-            if self.description.key == "duration":
-                self.device.mark_running()
-        self.async_write_ha_state()
+        try:
+            if self.device.is_running:
+                sequence = build_sequence_payload(
+                    self.device.speed,
+                    self.device.duration,
+                    self.device.fade_out,
+                    self.device.fade_steps,
+                )
+                await self.device.send_payloads(
+                    "set_program", [sequence], keep_connected=False
+                )
+        except Exception:
+            setattr(self.device, self.description.key, previous)
+            raise
+        self.device.notify_listeners()
